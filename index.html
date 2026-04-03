@@ -648,6 +648,8 @@ select.finput option{background:var(--bg2)}
     </div>
     <label class="flabel">University email</label>
     <input class="finput" id="sEmail" type="email" placeholder="yourname@university.ac.in">
+    <label class="flabel">Password</label>
+    <input class="finput" id="sPassword" type="password" placeholder="Create a strong password">
     <div class="frow">
       <div><label class="flabel">Branch</label><input class="finput" id="sBranch" placeholder="CSE"></div>
       <div><label class="flabel">Year</label><select class="finput" id="sYear"><option>1st year</option><option>2nd year</option><option selected>3rd year</option><option>4th year</option></select></div>
@@ -1309,6 +1311,11 @@ select.finput option{background:var(--bg2)}
 
 <script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>
 // ── STATE ──
+const API_BASE = 'http://localhost:5000/api';
+let authToken = localStorage.getItem('kiit_token') || '';
+let currentUserId = localStorage.getItem('kiit_user_id') || '';
+let currentUserEmail = localStorage.getItem('kiit_user_email') || '';
+
 let ME = { name:'Rahul Singh', initials:'RS', dept:'CSE · 3rd year', bio:'Passionate footballer and cricket lover. CSE 3rd year.', sports:['football','cricket'], bg:'#E1F5EE', col:'#0F6E56' };
 let signupSports = [];
 let activeSportTab = 'football';
@@ -1327,7 +1334,7 @@ const SPORT_META = {
   basketball:  {emoji:'🏀',bg:'#FAECE7',col:'#993C1D',label:'Basketball',cls:'tag-basketball'},
 };
 
-const PLAYERS = [
+let PLAYERS = [
   {id:'PK',initials:'PK',name:'Priya Kumari',dept:'ECE · 2nd year',sports:['badminton','tabletennis'],bg:'#E6F1FB',col:'#185FA5',online:true,bio:'Badminton state-level player. Love table tennis too.',matches:22,friends:15,teams:2},
   {id:'AJ',initials:'AJ',name:'Arjun Jha',dept:'Mech · 4th year',sports:['basketball','football'],bg:'#FAEEDA',col:'#854F0B',online:true,bio:'Basketball fanatic. Football on weekends.',matches:31,friends:20,teams:3},
   {id:'SM',initials:'SM',name:'Sneha Mohanty',dept:'IT · 1st year',sports:['cricket'],bg:'#FAECE7',col:'#993C1D',online:false,bio:'Cricket is life. Bowling specialist.',matches:8,friends:6,teams:1},
@@ -1377,6 +1384,110 @@ let CHALLENGES = [
   {id:'ch1',fromTeam:'Mech Legends',fromTeamId:'t2',toTeam:'CSE Strikers',toTeamId:'t1',sport:'Cricket',date:'Sun, 23 Mar',venue:'Cricket ground',status:'pending'},
 ];
 
+function withApiHeaders(extra={}){
+  const headers={...extra};
+  if(authToken)headers.Authorization='Bearer '+authToken;
+  return headers;
+}
+
+async function apiFetch(path, options={}){
+  const cfg={...options};
+  cfg.headers=withApiHeaders(cfg.headers||{});
+  const res=await fetch(API_BASE+path,cfg);
+  let data={};
+  try{data=await res.json();}catch(_e){data={};}
+  if(!res.ok){
+    throw new Error(data.message||'Request failed');
+  }
+  return data;
+}
+
+function parseYearNumber(yearText){
+  const n=parseInt(String(yearText||'').replace(/[^0-9]/g,''),10);
+  return Number.isFinite(n)?n:1;
+}
+
+function apiSportKey(sport){
+  if(!sport)return '';
+  const v=String(sport).toLowerCase().replace(/\s+/g,'');
+  if(v==='tabletennis'||v==='tt')return 'tabletennis';
+  return v;
+}
+
+function sportLabelFromKey(key){
+  const k=apiSportKey(key);
+  return SPORT_META[k]?SPORT_META[k].label:String(key||'');
+}
+
+function mapUserToPlayer(u){
+  const name=((u.firstName||'')+' '+(u.lastName||'')).trim()||u.name||'Player';
+  const branch=u.branch||'BTech';
+  const year=(u.year||'').toString();
+  const yearLabel=year?`${year}${year==='1'?'st':year==='2'?'nd':year==='3'?'rd':'th'} year`:'1st year';
+  const sp=(u.sports||[]).map(apiSportKey).filter(Boolean);
+  const main=SPORT_META[sp[0]]||SPORT_META.football;
+  return {
+    id:u._id||u.id,
+    initials:initials(name),
+    name,
+    dept:`${branch} · ${yearLabel}`,
+    sports:sp.length?sp:['football'],
+    bg:main.bg,
+    col:main.col,
+    online:true,
+    bio:u.bio||'',
+    matches:u.stats?.matchesPlayed||0,
+    friends:u.stats?.friends||0,
+    teams:u.stats?.teamsJoined||0
+  };
+}
+
+function teamMemberId(m){
+  if(!m)return '';
+  if(typeof m==='string')return m;
+  if(m.user&&typeof m.user==='string')return m.user;
+  return m.user?m.user._id||m.user.id:m._id||m.id||'';
+}
+
+function mapTeamFromApi(t){
+  const sportKey=apiSportKey(t.sport);
+  const meta=SPORT_META[sportKey]||SPORT_META.football;
+  const memberIds=(t.members||[]).map(teamMemberId).filter(Boolean);
+  let captainName='Captain';
+  let captainId='';
+  if(t.captain&&typeof t.captain==='object'){
+    captainId=t.captain._id||t.captain.id||'';
+    captainName=((t.captain.firstName||'')+' '+(t.captain.lastName||'')).trim()||captainName;
+  }else if(typeof t.captain==='string'){
+    captainId=t.captain;
+    const capUser=PLAYERS.find(p=>p.id===captainId);
+    captainName=capUser?capUser.name:captainName;
+  }
+  return {
+    id:t._id||t.id,
+    emoji:meta.emoji,
+    name:t.name||'Team',
+    sport:sportLabelFromKey(t.sport),
+    members:memberIds,
+    count:t.stats?.totalMembers||memberIds.length||0,
+    bg:meta.bg,
+    col:meta.col,
+    captainId,
+    captain:captainName,
+    open:t.openForJoining===false?'no':'yes',
+    isNew:!!t.isNew,
+    joinRequests:[]
+  };
+}
+
+function extractList(payload, key){
+  if(Array.isArray(payload?.[key]))return payload[key];
+  if(Array.isArray(payload?.data?.[key]))return payload.data[key];
+  if(Array.isArray(payload?.data))return payload.data;
+  if(Array.isArray(payload))return payload;
+  return [];
+}
+
 // ── HELPERS ──
 function initials(n){return n.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2)}
 function sTag(s){const m=SPORT_META[s];return m?`<span class="sport-tag ${m.cls}">${m.emoji} ${m.label}</span>`:''}
@@ -1406,14 +1517,16 @@ function toggleSport(el,s){el.classList.toggle('sel');if(signupSports.includes(s
 // ── OTP SYSTEM ──
 let _otp='', _otpTimer=null, _pendingSignup={};
 
-function requestOtp(){
+async function requestOtp(){
   const f=document.getElementById('sFirst').value.trim();
   const l=document.getElementById('sLast').value.trim();
   const email=document.getElementById('sEmail').value.trim();
+  const password=document.getElementById('sPassword').value;
   const b=document.getElementById('sBranch').value.trim()||'BTech';
   const y=document.getElementById('sYear').value;
   if(!f){document.getElementById('sFirst').focus();showToast('Enter your first name','⚠️');return}
   if(!email||!email.includes('@')){document.getElementById('sEmail').focus();showToast('Enter a valid university email','⚠️');return}
+  if(!password||password.length<6){document.getElementById('sPassword').focus();showToast('Password must be at least 6 characters','⚠️');return}
   // validate university email domain
   const domain=email.split('@')[1]||'';
   if(!domain.includes('kiit')||email.length<6){
@@ -1423,16 +1536,31 @@ function requestOtp(){
       return;
     }
   }
-  _pendingSignup={name:(f+' '+l).trim(),dept:b+' · '+y,email};
-  // generate 6-digit OTP
-  _otp=String(Math.floor(100000+Math.random()*900000));
-  // show OTP modal — sending state
+  _pendingSignup={name:(f+' '+l).trim(),dept:b+' · '+y,email,password,branch:b,year:y,sports:[...signupSports]};
   closeModal('signup');
   document.getElementById('otp-sending-view').style.display='block';
   document.getElementById('otp-verify-view').style.display='none';
   openModal('otp');
-  // simulate send delay
-  setTimeout(()=>{
+
+  try{
+    const payload={
+      firstName:f,
+      lastName:l,
+      email,
+      password,
+      branch:b,
+      year:parseYearNumber(y),
+      sports:signupSports.map(apiSportKey).filter(Boolean)
+    };
+    const res=await apiFetch('/auth/register',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(payload)
+    });
+    _otp=String(res.otp||res.data?.otp||'');
+    currentUserEmail=email;
+    localStorage.setItem('kiit_user_email',email);
+
     document.getElementById('otp-sending-view').style.display='none';
     document.getElementById('otp-verify-view').style.display='block';
     document.getElementById('otpEmailDisplay').textContent=email;
@@ -1444,7 +1572,11 @@ function requestOtp(){
     document.getElementById('otp0').focus();
     startOtpTimer();
     showToast('OTP sent to '+email+'! 📧','✓');
-  },1800);
+  }catch(err){
+    closeModal('otp');
+    openModal('signup');
+    showToast(err.message||'Could not send OTP','⚠️');
+  }
 }
 
 function startOtpTimer(){
@@ -1464,15 +1596,24 @@ function startOtpTimer(){
   },1000);
 }
 
-function resendOtp(){
+async function resendOtp(){
   if(document.getElementById('resendLink').classList.contains('disabled'))return;
-  _otp=String(Math.floor(100000+Math.random()*900000));
-  document.getElementById('demoOtpHint').textContent=_otp;
-  document.getElementById('otpError').style.display='none';
-  for(let i=0;i<6;i++){const b=document.getElementById('otp'+i);b.value='';b.classList.remove('filled');}
-  document.getElementById('otp0').focus();
-  startOtpTimer();
-  showToast('New OTP sent! 📧','✓');
+  try{
+    const res=await apiFetch('/auth/resend-otp',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({email:_pendingSignup.email||currentUserEmail})
+    });
+    _otp=String(res.otp||res.data?.otp||'');
+    document.getElementById('demoOtpHint').textContent=_otp;
+    document.getElementById('otpError').style.display='none';
+    for(let i=0;i<6;i++){const b=document.getElementById('otp'+i);b.value='';b.classList.remove('filled');}
+    document.getElementById('otp0').focus();
+    startOtpTimer();
+    showToast('New OTP sent! 📧','✓');
+  }catch(err){
+    showToast(err.message||'Could not resend OTP','⚠️');
+  }
 }
 
 function otpInput(el,idx){
@@ -1502,27 +1643,44 @@ function otpPaste(e){
   else if(text.length>0)document.getElementById('otp'+(text.length-1)).focus();
 }
 
-function verifyOtp(){
+async function verifyOtp(){
   const entered=[...Array(6)].map((_,i)=>document.getElementById('otp'+i).value).join('');
   if(entered.length<6){showToast('Enter all 6 digits','⚠️');return;}
   const btn=document.getElementById('otpVerifyBtn');
   btn.textContent='Verifying...';btn.disabled=true;
-  setTimeout(()=>{
-    if(entered===_otp){
+  try{
+    const res=await apiFetch('/auth/verify-otp',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({email:_pendingSignup.email||currentUserEmail,otp:entered})
+    });
+    authToken=res.token||res.data?.token||'';
+    const user=res.user||res.data?.user||null;
+    if(authToken){
+      localStorage.setItem('kiit_token',authToken);
+    }
+    if(user?._id){
+      currentUserId=user._id;
+      localStorage.setItem('kiit_user_id',currentUserId);
+    }
+    if(_pendingSignup.email||currentUserEmail){
+      localStorage.setItem('kiit_user_email',_pendingSignup.email||currentUserEmail);
+    }
+
       document.getElementById('otpError').style.display='none';
       document.getElementById('otpSuccess').style.display='block';
       clearInterval(_otpTimer);
       btn.textContent='✓ Verified!';
       btn.style.background='var(--gd)';
-      setTimeout(()=>{
-        closeModal('otp');
-        launchApp(_pendingSignup.name,_pendingSignup.dept);
-        showToast('Welcome to KIIT Sports! 🎉','🏆');
-      },900);
-    } else {
+    setTimeout(()=>{
+      closeModal('otp');
+      if(user)launchAppFromUser(user);
+      else launchApp(_pendingSignup.name,_pendingSignup.dept);
+      showToast('Welcome to KIIT Sports! 🎉','🏆');
+    },650);
+  }catch(_err){
       document.getElementById('otpError').style.display='block';
       document.getElementById('otpSuccess').style.display='none';
-      // shake boxes
       document.querySelectorAll('.otp-box').forEach(b=>{
         b.style.borderColor='var(--re)';
         b.value='';b.classList.remove('filled');
@@ -1530,8 +1688,7 @@ function verifyOtp(){
       setTimeout(()=>document.querySelectorAll('.otp-box').forEach(b=>b.style.borderColor=''),800);
       document.getElementById('otp0').focus();
       btn.textContent='Verify & Create Account';btn.disabled=false;
-    }
-  },700);
+  }
 }
 
 function cancelOtp(){
@@ -1548,6 +1705,60 @@ function doSignup(){
   launchApp(f+' '+l,b+' · '+y);
   closeModal('signup');
 }
+
+function launchAppFromUser(user){
+  const name=((user.firstName||'')+' '+(user.lastName||'')).trim()||'Player';
+  const year=(user.year||'').toString();
+  const yearLabel=year?`${year}${year==='1'?'st':year==='2'?'nd':year==='3'?'rd':'th'} year`:'1st year';
+  const dept=`${user.branch||'BTech'} · ${yearLabel}`;
+  const primary=SPORT_META[apiSportKey((user.sports||[])[0])]||SPORT_META.football;
+  currentUserId=user._id||currentUserId;
+  if(currentUserId)localStorage.setItem('kiit_user_id',currentUserId);
+  ME={
+    name,
+    initials:initials(name),
+    dept,
+    bio:user.bio||ME.bio,
+    sports:(user.sports||[]).map(apiSportKey).filter(Boolean),
+    bg:primary.bg,
+    col:primary.col
+  };
+  launchApp(ME.name,ME.dept);
+}
+
+async function syncWithBackend(){
+  if(!authToken)return;
+  try{
+    const [meRes,usersRes,teamsRes]=await Promise.all([
+      apiFetch('/users/me'),
+      apiFetch('/users'),
+      apiFetch('/teams')
+    ]);
+
+    const meUser=meRes.user||meRes.data?.user||meRes.data||null;
+    if(meUser){
+      launchAppFromUser(meUser);
+      myConnections=new Set((meUser.connections||[]).map(v=>typeof v==='string'?v:(v._id||v.id)).filter(Boolean));
+      myJoinedTeams=new Set((meUser.teams||[]).map(v=>typeof v==='string'?v:(v._id||v.id)).filter(Boolean));
+    }
+
+    const users=extractList(usersRes,'users');
+    PLAYERS=users
+      .filter(u=>(u._id||u.id)!==currentUserId)
+      .map(mapUserToPlayer);
+
+    const teams=extractList(teamsRes,'teams');
+    if(teams.length){
+      TEAMS=teams.map(mapTeamFromApi);
+    }
+
+    renderAll();
+  }catch(err){
+    showToast(err.message||'Backend sync failed; using local data','⚠️');
+    renderAll();
+  }
+}
+
 function launchApp(name,dept){
   ME.name=name;ME.initials=initials(name);ME.dept=dept;
   document.getElementById('landing').style.display='none';
@@ -1564,7 +1775,16 @@ function launchApp(name,dept){
   renderAll();
   updateNotifBadge();
 }
-function logout(){document.getElementById('app').style.display='none';document.getElementById('landing').style.display='flex'}
+function logout(){
+  authToken='';
+  currentUserId='';
+  currentUserEmail='';
+  localStorage.removeItem('kiit_token');
+  localStorage.removeItem('kiit_user_id');
+  localStorage.removeItem('kiit_user_email');
+  document.getElementById('app').style.display='none';
+  document.getElementById('landing').style.display='flex';
+}
 
 // ── RENDER ALL ──
 function renderAll(){
@@ -1602,7 +1822,7 @@ function renderFeed(){
       </div>
     </div>`;
   });
-  document.getElementById('pPosts').textContent=POSTS.filter(p=>p.authorId==='ME').length;
+  document.getElementById('pPosts').textContent=POSTS.filter(p=>p.authorId==='ME'||(currentUserId&&p.authorId===currentUserId)).length;
 }
 
 function toggleLike(postId,btn){
@@ -1652,7 +1872,7 @@ function submitPost(){
   const url=document.getElementById('postMediaUrl').value.trim();
   if(!txt&&!url){showToast('Write something first!','⚠️');return}
   const newPost={
-    id:'p'+(Date.now()),authorId:'ME',author:ME.name,initials:ME.initials,
+    id:'p'+(Date.now()),authorId:currentUserId||'ME',author:ME.name,initials:ME.initials,
     bg:ME.bg,col:ME.col,time:'Just now',text:txt,sport:sport||'',
     mediaType:postMediaType,mediaUrl:url,likes:0,liked:false,comments:[]
   };
@@ -1749,19 +1969,28 @@ function renderPlayers(search=pSearch,sport=pSport){
 }
 function filterPlayers(v){pSearch=v;renderPlayers()}
 function filterBySport(s,el){pSport=s;document.querySelectorAll('#page-players .chip').forEach(c=>c.classList.remove('active'));el.classList.add('active');renderPlayers()}
-function toggleConnect(playerId,btn){
+async function toggleConnect(playerId,btn){
   if(myConnections.has(playerId)||pendingConnReqs.has(playerId))return;
-  pendingConnReqs.add(playerId);
-  btn.textContent='Request sent';btn.className='p-conn sent';
-  // Add notification for the other player (in real app)
-  NOTIFICATIONS.push({id:'n'+Date.now(),type:'connect_accepted',text:`${PLAYERS.find(p=>p.id===playerId)?.name} will be notified of your request`,time:'Just now',unread:false,status:'info'});
-  showToast('Connect request sent!','📤');
-  renderRightCol();
+  try{
+    await apiFetch('/users/'+playerId+'/connect',{method:'POST'});
+    pendingConnReqs.add(playerId);
+    btn.textContent='Request sent';btn.className='p-conn sent';
+    NOTIFICATIONS.push({id:'n'+Date.now(),type:'connect_accepted',text:`${PLAYERS.find(p=>p.id===playerId)?.name} will be notified of your request`,time:'Just now',unread:false,status:'info'});
+    showToast('Connect request sent!','📤');
+    renderRightCol();
+  }catch(err){
+    showToast(err.message||'Could not send request','⚠️');
+  }
 }
-function quickConnect(playerId,btn){
+async function quickConnect(playerId,btn){
   if(myConnections.has(playerId))return;
-  pendingConnReqs.add(playerId);btn.textContent='Sent ✓';btn.disabled=true;
-  showToast('Request sent!','📤');
+  try{
+    await apiFetch('/users/'+playerId+'/connect',{method:'POST'});
+    pendingConnReqs.add(playerId);btn.textContent='Sent ✓';btn.disabled=true;
+    showToast('Request sent!','📤');
+  }catch(err){
+    showToast(err.message||'Could not send request','⚠️');
+  }
 }
 function viewProfile(playerId){
   viewingPlayerId=playerId;
@@ -1794,7 +2023,7 @@ function renderTeams(sportFilter='all'){
   const filtered=TEAMS.filter(t=>sportFilter==='all'||t.sport===sportFilter);
   grid.innerHTML=filtered.map(t=>{
     const avs=t.members.slice(0,4).map(m=>`<div class="tm-av" style="background:${t.bg};color:${t.col}">${m}</div>`).join('');
-    const isMember=myJoinedTeams.has(t.id)||t.members.includes('RS');
+    const isMember=myJoinedTeams.has(t.id)||(currentUserId&&t.members.includes(currentUserId));
     const hasPendingReq=t.joinRequests&&t.joinRequests.some(r=>r.status==='pending');
     const openLbl=t.open==='yes'?'<span class="t-open open-yes">● Open</span>':t.open==='tryout'?'<span class="t-open open-tryout">● Tryout</span>':'<span class="t-open open-no">● Full</span>';
     const joinDisabled=t.open==='no'||isMember;
@@ -1816,19 +2045,22 @@ function renderTeams(sportFilter='all'){
   }).join('');
 }
 function filterTeams(sport,el){document.querySelectorAll('#page-teams .chip').forEach(c=>c.classList.remove('active'));el.classList.add('active');renderTeams(sport)}
-function requestJoinTeam(teamId,btn){
+async function requestJoinTeam(teamId,btn){
   const team=TEAMS.find(t=>t.id===teamId);if(!team||team.open==='no')return;
-  if(myJoinedTeams.has(teamId)||team.members.includes('RS'))return;
-  // add join request to team
-  const req={playerId:'ME',playerName:ME.name,playerInitials:ME.initials,playerBg:ME.bg,playerCol:ME.col,status:'pending',time:'Just now'};
-  team.joinRequests.push(req);
-  // Add to notifications (captain sees it)
-  const n={id:'n'+Date.now(),type:'join_request',teamId,playerId:'ME',playerName:ME.name,playerInitials:ME.initials,playerBg:ME.bg,playerCol:ME.col,text:`${ME.name} wants to join ${team.name} (${team.sport})`,time:'Just now',unread:true,status:'pending'};
-  NOTIFICATIONS.unshift(n);
-  btn.textContent='Request sent';btn.className='tj requested';btn.disabled=true;
-  notifCount++;updateNotifBadge();
-  showToast(`Join request sent to ${team.name}! Waiting for captain's approval.`,'📤');
-  renderRightCol();renderNotifications();
+  if(myJoinedTeams.has(teamId)||(currentUserId&&team.members.includes(currentUserId)))return;
+  try{
+    await apiFetch('/teams/'+teamId+'/request-join',{method:'POST'});
+    const req={playerId:currentUserId||'ME',playerName:ME.name,playerInitials:ME.initials,playerBg:ME.bg,playerCol:ME.col,status:'pending',time:'Just now'};
+    team.joinRequests.push(req);
+    const n={id:'n'+Date.now(),type:'join_request',teamId,playerId:currentUserId||'ME',playerName:ME.name,playerInitials:ME.initials,playerBg:ME.bg,playerCol:ME.col,text:`${ME.name} wants to join ${team.name} (${team.sport})`,time:'Just now',unread:true,status:'pending'};
+    NOTIFICATIONS.unshift(n);
+    btn.textContent='Request sent';btn.className='tj requested';btn.disabled=true;
+    notifCount++;updateNotifBadge();
+    showToast(`Join request sent to ${team.name}! Waiting for captain's approval.`,'📤');
+    renderRightCol();renderNotifications();
+  }catch(err){
+    showToast(err.message||'Could not send join request','⚠️');
+  }
 }
 function acceptJoinReq(notifId,teamId,playerId){
   const n=NOTIFICATIONS.find(x=>x.id===notifId);if(n)n.status='accepted';
@@ -1973,20 +2205,43 @@ function switchSportTab(sport,el){
   document.querySelectorAll('.sf').forEach(f=>f.classList.remove('active'));
   document.getElementById('sf-'+sport).classList.add('active');
 }
-function submitTeamReg(){
+async function submitTeamReg(){
   const name=document.getElementById('regName').value.trim();
   const captain=document.getElementById('regCaptain').value.trim();
   const open=document.getElementById('regOpen').value;
   if(!name){showToast('Enter a team name','⚠️');return}
   if(!captain){showToast('Enter captain name','⚠️');return}
   const m=SPORT_META[activeSportTab];
-  const newTeam={id:'t'+Date.now(),emoji:m.emoji,name,sport:m.label,members:[initials(captain)],count:1,bg:m.bg,col:m.col,captainId:'ME',captain,open,isNew:true,joinRequests:[]};
-  TEAMS.unshift(newTeam);myJoinedTeams.add(newTeam.id);
-  closeModal('teamReg');
-  document.getElementById('regName').value='';document.getElementById('regCaptain').value='';
-  showPage('teams',document.querySelector('.ni:nth-child(4)'));
-  renderTeams();renderMyProfile();
-  showToast(`Team "${name}" registered! 🛡️`,'✓');
+  try{
+    const payload={
+      name,
+      sport:m.label,
+      description:'Registered from web app',
+      openForJoining:open!=='no'
+    };
+    const res=await apiFetch('/teams',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(payload)
+    });
+    const teamObj=res.team||res.data?.team||res.data||null;
+    if(teamObj){
+      const mapped=mapTeamFromApi(teamObj);
+      mapped.captain=captain||mapped.captain;
+      TEAMS.unshift(mapped);
+      myJoinedTeams.add(mapped.id);
+    }else{
+      const newTeam={id:'t'+Date.now(),emoji:m.emoji,name,sport:m.label,members:[currentUserId||'ME'],count:1,bg:m.bg,col:m.col,captainId:currentUserId||'ME',captain,open,isNew:true,joinRequests:[]};
+      TEAMS.unshift(newTeam);myJoinedTeams.add(newTeam.id);
+    }
+    closeModal('teamReg');
+    document.getElementById('regName').value='';document.getElementById('regCaptain').value='';
+    showPage('teams',document.querySelector('.ni:nth-child(4)'));
+    renderTeams();renderMyProfile();
+    showToast(`Team "${name}" registered! 🛡️`,'✓');
+  }catch(err){
+    showToast(err.message||'Could not register team','⚠️');
+  }
 }
 
 // ── PROFILE ──
@@ -1999,7 +2254,7 @@ function switchProfileTab(tab,el){
   if(tab==='connections')renderMyConnections();
 }
 function renderMyProfile(){
-  const myPosts=POSTS.filter(p=>p.authorId==='ME');
+  const myPosts=POSTS.filter(p=>p.authorId==='ME'||(currentUserId&&p.authorId===currentUserId));
   const grid=document.getElementById('myPostsGrid');
   if(myPosts.length===0){grid.innerHTML='<p style="color:var(--t2);font-size:14px;padding:1rem">No posts yet. Share your first match highlight!</p>';return}
   grid.innerHTML=myPosts.map(p=>`
@@ -2010,7 +2265,7 @@ function renderMyProfile(){
   document.getElementById('pPosts').textContent=myPosts.length;
 }
 function renderMyTeamsTab(){
-  const myTeamsList=TEAMS.filter(t=>myJoinedTeams.has(t.id)||t.members.includes('RS')||t.captainId==='ME');
+  const myTeamsList=TEAMS.filter(t=>myJoinedTeams.has(t.id)||(currentUserId&&t.members.includes(currentUserId))||t.captainId===currentUserId||t.captainId==='ME');
   const grid=document.getElementById('myTeamsGrid');
   if(myTeamsList.length===0){grid.innerHTML='<p style="color:var(--t2);font-size:14px;padding:1rem">Not part of any team yet. Join or register one!</p>';return}
   grid.innerHTML=myTeamsList.map(t=>`<div class="tcard my-team">
@@ -2033,11 +2288,26 @@ function renderMyConnections(){
     <button class="p-conn connected" disabled>Connected ✓</button>
   </div>`).join('');
 }
-function saveProfile(){
+async function saveProfile(){
   const n=document.getElementById('epName').value.trim()||ME.name;
   const b=document.getElementById('epBranch').value.trim()||'BTech';
   const y=document.getElementById('epYear').value;
   const bio=document.getElementById('epBio').value.trim();
+  try{
+    if(currentUserId){
+      const nameParts=n.split(' ');
+      const payload={
+        firstName:nameParts[0]||n,
+        lastName:nameParts.slice(1).join(' '),
+        branch:b,
+        year:parseYearNumber(y),
+        bio
+      };
+      await apiFetch('/users/'+currentUserId,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    }
+  }catch(err){
+    showToast(err.message||'Could not save profile to backend','⚠️');
+  }
   ME.name=n;ME.initials=initials(n);ME.dept=b+' · '+y;ME.bio=bio;
   document.getElementById('sidebarAv').textContent=ME.initials;
   document.getElementById('sidebarName').textContent=ME.name;
@@ -2283,4 +2553,26 @@ function switchRankCat(sport, cat, el){
   document.getElementById(`${sport}-${cat}`).classList.add('active');
 }
 
-fun
+function renderAllRankings(){
+  renderFootball();
+  renderCricket();
+  renderBadmintonSingles();
+  renderBadmintonDoubles();
+  renderBadmintonMixed();
+  renderTTSingles();
+  renderTTDoubles();
+  renderBasketball();
+}
+
+document.addEventListener('DOMContentLoaded',async ()=>{
+  renderAllRankings();
+  updateNotifBadge();
+  if(authToken){
+    document.getElementById('landing').style.display='none';
+    document.getElementById('app').style.display='block';
+    await syncWithBackend();
+  }
+});
+</script>
+</body>
+</html>
