@@ -1397,9 +1397,9 @@ async function apiFetch(path, options={}){
   let data={};
   try{data=await res.json();}catch(_e){data={};}
   if(!res.ok){
-    throw new Error(data.message||'Request failed');
-  }
-  return data;
+    throw new Error(data.message||data.error||'Request failed');
+    }
+    return data;
 }
 
 function parseYearNumber(yearText){
@@ -1525,8 +1525,10 @@ async function requestOtp(){
   const b=document.getElementById('sBranch').value.trim()||'BTech';
   const y=document.getElementById('sYear').value;
   if(!f){document.getElementById('sFirst').focus();showToast('Enter your first name','⚠️');return}
-  if(!email||!email.includes('@')){document.getElementById('sEmail').focus();showToast('Enter a valid university email','⚠️');return}
+  if(!l){document.getElementById('sLast').focus();showToast('Enter your last name','⚠️');return}
+  if(!email||!email.includes('@')){document.getElementById('sEmail').focus();showToast('Enter a valid email','⚠️');return}
   if(!password||password.length<6){document.getElementById('sPassword').focus();showToast('Password must be at least 6 characters','⚠️');return}
+  if(signupSports.length===0){showToast('Select at least one sport','⚠️');return}
   // validate university email domain
   const domain=email.split('@')[1]||'';
   if(!domain.includes('kiit')||email.length<6){
@@ -1543,6 +1545,10 @@ async function requestOtp(){
   openModal('otp');
 
   try{
+    const btn=document.querySelector('#signupModal .mbtn');
+    const origTxt=btn.textContent;
+    btn.textContent='Sending OTP...';
+    btn.disabled=true;
     const payload={
       firstName:f,
       lastName:l,
@@ -1556,7 +1562,7 @@ async function requestOtp(){
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify(payload)
-    });
+    });btn.textContent=origTxt;btn.disabled=false;
     _otp=String(res.otp||res.data?.otp||'');
     currentUserEmail=email;
     localStorage.setItem('kiit_user_email',email);
@@ -1573,6 +1579,9 @@ async function requestOtp(){
     startOtpTimer();
     showToast('OTP sent to '+email+'! 📧','✓');
   }catch(err){
+    const btn=document.querySelector('#signupModal .mbtn');
+    btn.disabled=false;
+    btn.textContent='Create Account & Send OTP';
     closeModal('otp');
     openModal('signup');
     showToast(err.message||'Could not send OTP','⚠️');
@@ -1674,12 +1683,21 @@ async function verifyOtp(){
       btn.style.background='var(--gd)';
     setTimeout(()=>{
       closeModal('otp');
+      signupSports=[];
+      document.getElementById('sFirst').value='';
+      document.getElementById('sLast').value='';
+      document.getElementById('sEmail').value='';
+      document.getElementById('sPassword').value='';
+      document.getElementById('sBranch').value='BTech';
+      document.getElementById('sYear').value='';
+      document.querySelectorAll('.sport-sel-grid .ssi').forEach(i=>i.classList.remove('sel'));
       if(user)launchAppFromUser(user);
       else launchApp(_pendingSignup.name,_pendingSignup.dept);
       showToast('Welcome to KIIT Sports! 🎉','🏆');
     },650);
-  }catch(_err){
+  }catch(err){
       document.getElementById('otpError').style.display='block';
+      document.getElementById('otpError').textContent=err.message||'Incorrect OTP. Please try again.';
       document.getElementById('otpSuccess').style.display='none';
       document.querySelectorAll('.otp-box').forEach(b=>{
         b.style.borderColor='var(--re)';
@@ -1729,10 +1747,11 @@ function launchAppFromUser(user){
 async function syncWithBackend(){
   if(!authToken)return;
   try{
+    console.log('[Sync] Fetching from backend...');
     const [meRes,usersRes,teamsRes]=await Promise.all([
-      apiFetch('/users/me'),
-      apiFetch('/users'),
-      apiFetch('/teams')
+      apiFetch('/users/me').catch(e=>{console.warn('[ME]',e.message);return {}}),
+      apiFetch('/users').catch(e=>{console.warn('[USERS]',e.message);return {}}),
+      apiFetch('/teams').catch(e=>{console.warn('[TEAMS]',e.message);return {}})
     ]);
 
     const meUser=meRes.user||meRes.data?.user||meRes.data||null;
@@ -1754,7 +1773,8 @@ async function syncWithBackend(){
 
     renderAll();
   }catch(err){
-    showToast(err.message||'Backend sync failed; using local data','⚠️');
+    console.error('[Sync] Error:',err.message);
+    showToast('Working offline - using cached data','ℹ️');
     renderAll();
   }
 }
@@ -1782,8 +1802,14 @@ function logout(){
   localStorage.removeItem('kiit_token');
   localStorage.removeItem('kiit_user_id');
   localStorage.removeItem('kiit_user_email');
+  _otp='';
+  _pendingSignup={};
+  myConnections.clear();
+  myJoinedTeams.clear();
+  pendingConnReqs.clear();
   document.getElementById('app').style.display='none';
   document.getElementById('landing').style.display='flex';
+  showToast('Logged out successfully','👋');
 }
 
 // ── RENDER ALL ──
@@ -2211,6 +2237,7 @@ async function submitTeamReg(){
   const open=document.getElementById('regOpen').value;
   if(!name){showToast('Enter a team name','⚠️');return}
   if(!captain){showToast('Enter captain name','⚠️');return}
+  if(name.length<3){showToast('Team name must be at least 3 characters','⚠️');return}
   const m=SPORT_META[activeSportTab];
   try{
     const payload={
@@ -2293,6 +2320,8 @@ async function saveProfile(){
   const b=document.getElementById('epBranch').value.trim()||'BTech';
   const y=document.getElementById('epYear').value;
   const bio=document.getElementById('epBio').value.trim();
+  if(!n){showToast('Enter your name','⚠️');return;}
+  if(n.length<2){showToast('Name must be at least 2 characters','⚠️');return;}
   try{
     if(currentUserId){
       const nameParts=n.split(' ');
